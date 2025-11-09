@@ -14,12 +14,33 @@ from selenium.webdriver.support import expected_conditions as EC
 from PIL import Image
 import pytesseract
 import io
+from flask import Flask
+import threading
+
+# ========== WEB SERVER (Keep Render Awake) ==========
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "✅ CVD Alert Bot is running!"
+
+@app.route('/health')
+def health():
+    return "OK", 200
+
+def run_server():
+    """Run Flask server in background"""
+    app.run(host='0.0.0.0', port=10000, debug=False, use_reloader=False)
 
 # ========== CONFIGURATION ==========
 # Replace these with your values
+
 TRADINGVIEW_CHART_URL = 'https://in.tradingview.com/chart/bXSKmqRP/'  # Your public chart URL
+
 TELEGRAM_BOT_TOKEN = '8248626952:AAHaS6S4CPloeUJhJvWLSrG8HXT8whSs6w8'  # Your bot token from @BotFather
+
 TELEGRAM_CHAT_ID = '1853898757'  # Your chat ID
+
 
 # Settings
 CHECK_INTERVAL_SECONDS = 120  # Check every 2 minutes
@@ -106,6 +127,12 @@ def capture_and_analyze_chart(driver):
 # ========== MAIN MONITORING LOOP ==========
 def main():
     """Main monitoring loop"""
+    
+    # Start web server in background thread (KEEP RENDER AWAKE)
+    server_thread = threading.Thread(target=run_server, daemon=True)
+    server_thread.start()
+    print("🌐 Web server started on port 10000")
+    
     print("=" * 50)
     print("TradingView CVD Alert Bot Started!")
     print("=" * 50)
@@ -179,13 +206,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-```
-
----
-
-## 📄 **FILE 2: requirements.txt**
-```
-selenium==4.15.2
-pillow==10.1.0
-pytesseract==0.3.10
-requests==2.31.0
