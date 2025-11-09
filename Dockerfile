@@ -6,19 +6,14 @@ RUN apt-get update && apt-get install -y \
     gnupg \
     unzip \
     curl \
-    && wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | apt-key add - \
-    && echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google-chrome.list \
-    && apt-get update \
-    && apt-get install -y google-chrome-stable \
-    && apt-get install -y tesseract-ocr \
+    chromium \
+    chromium-driver \
+    tesseract-ocr \
     && rm -rf /var/lib/apt/lists/*
 
-# Install ChromeDriver
-RUN CHROMEDRIVER_VERSION=$(curl -sS chromedriver.storage.googleapis.com/LATEST_RELEASE) \
-    && wget -O /tmp/chromedriver.zip https://chromedriver.storage.googleapis.com/$CHROMEDRIVER_VERSION/chromedriver_linux64.zip \
-    && unzip /tmp/chromedriver.zip chromedriver -d /usr/local/bin/ \
-    && rm /tmp/chromedriver.zip \
-    && chmod +x /usr/local/bin/chromedriver
+# Set environment variables for Chromium
+ENV CHROME_BIN=/usr/bin/chromium
+ENV CHROMEDRIVER_PATH=/usr/bin/chromedriver
 
 # Set display port to avoid crash
 ENV DISPLAY=:99
@@ -40,3 +35,32 @@ EXPOSE 10000
 
 # Run the bot
 CMD ["python", "-u", "main.py"]
+```
+
+### **Bước 3: Commit changes**
+1. Scroll xuống
+2. Commit message: `Fix Chrome installation`
+3. Click **"Commit changes"**
+
+---
+
+## ✅ **SAU KHI COMMIT:**
+
+1. **Quay lại Render**
+2. Render sẽ **tự động re-deploy** (~2-3 phút)
+3. Hoặc click **"Manual Deploy"** → **"Deploy latest commit"**
+
+---
+
+## 📊 **THEO DÕI BUILD MỚI:**
+
+Logs sẽ hiển thị:
+```
+==> Building...
+Step 1/11 : FROM python:3.9-slim
+Step 2/11 : RUN apt-get update && apt-get install -y chromium...
+---> Running in abc123
+Installing chromium...
+Installing chromium-driver...
+Installing tesseract-ocr...
+✅ Successfully installed!
