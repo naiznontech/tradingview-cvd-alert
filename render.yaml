@@ -3,7 +3,7 @@ services:
     name: tradingview-cvd-alert
     env: docker
     plan: free
-    healthCheckPath: /
+    healthCheckPath: /health
     envVars:
       - key: PORT
         value: 10000
