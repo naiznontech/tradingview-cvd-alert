@@ -1,6 +1,6 @@
 # TradingView CVD Divergence Alert Bot
 # 100% Free - Detect +RD/-RD labels via screenshot + OCR
-# Deploy to Railway.app free tier
+# Deploy to Render.com free tier
 
 import os
 import time
@@ -41,7 +41,6 @@ TELEGRAM_BOT_TOKEN = '8248626952:AAHaS6S4CPloeUJhJvWLSrG8HXT8whSs6w8'  # Your bo
 
 TELEGRAM_CHAT_ID = '1853898757'  # Your chat ID
 
-
 # Settings
 CHECK_INTERVAL_SECONDS = 120  # Check every 2 minutes
 WAIT_FOR_CHART_LOAD = 10  # Seconds to wait for chart to load
@@ -73,7 +72,7 @@ def send_telegram_message(message, image_bytes=None):
 
 # ========== BROWSER SETUP ==========
 def setup_browser():
-    """Setup headless Chrome browser for Railway deployment"""
+    """Setup headless Chrome browser for Render deployment"""
     chrome_options = Options()
     chrome_options.add_argument('--headless')
     chrome_options.add_argument('--no-sandbox')
@@ -206,3 +205,14 @@ def main():
 
 if __name__ == "__main__":
     main()
+```
+
+---
+
+## 📄 **FILE `requirements.txt` HOÀN CHỈNH**
+```
+selenium==4.15.2
+pillow==10.1.0
+pytesseract==0.3.10
+requests==2.31.0
+flask==3.0.0
