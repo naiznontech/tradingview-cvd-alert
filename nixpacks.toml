@@ -1,0 +1,8 @@
+[phases.setup]
+nixPkgs = ['python39', 'chromium', 'chromedriver', 'tesseract']
+
+[phases.install]
+cmds = ['pip install -r requirements.txt']
+
+[start]
+cmd = 'python main.py'
