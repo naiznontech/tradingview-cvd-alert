@@ -1,5 +1,5 @@
 # TradingView CVD Divergence Alert Bot
-# Detect divergence by COLOR LINES (not OCR text)
+# Self-calculate CVD from Binance API (No TradingView needed!)
 # Check every 5 minutes - Optimized for Render free tier
 
 import os
@@ -10,14 +10,13 @@ import pandas as pd
 import numpy as np
 from flask import Flask
 import threading
-import gc
 
 # ========== WEB SERVER ==========
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "CVD Alert Bot is running! (Color Detection Mode)"
+    return "CVD Alert Bot is running! (Binance API Mode - No TradingView)"
 
 @app.route('/health')
 def health():
@@ -26,26 +25,23 @@ def health():
 def run_server():
     app.run(host='0.0.0.0', port=10000, debug=False, use_reloader=False)
 
-# Replace these with your values
-
-TRADINGVIEW_CHART_URL = 'https://in.tradingview.com/chart/bXSKmqRP/'  # Your public chart URL
-
+# ========== CONFIGURATION ==========
 TELEGRAM_BOT_TOKEN = '8248626952:AAHaS6S4CPloeUJhJvWLSrG8HXT8whSs6w8'  # Your bot token from @BotFather
 
 TELEGRAM_CHAT_ID = '1853898757'  # Your chat ID
 
 
+# Binance settings
+SYMBOL = "BTCUSDT"
+TIMEFRAME = "15m"
+CVD_PERIOD = 21
+DIVERGENCE_LOOKBACK = 30
 
-CHECK_INTERVAL_SECONDS = 300  # Check every 5 minutes
-WAIT_FOR_CHART_LOAD = 20
+CHECK_INTERVAL_SECONDS = 300
 MAX_RETRIES = 3
 
-# Color detection thresholds
-RED_THRESHOLD = 5000    # Minimum red pixels for bearish line
-GREEN_THRESHOLD = 5000  # Minimum green pixels for bullish line
-
 # ========== TELEGRAM FUNCTIONS ==========
-def send_telegram_message(message, image_bytes=None):
+def send_telegram_message(message):
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
         data = {
@@ -54,242 +50,258 @@ def send_telegram_message(message, image_bytes=None):
             "parse_mode": "Markdown"
         }
         response = requests.post(url, data=data, timeout=10)
-        
-        if image_bytes:
-            photo_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
-            files = {'photo': image_bytes}
-            data = {'chat_id': TELEGRAM_CHAT_ID}
-            requests.post(photo_url, files=files, data=data, timeout=30)
-        
         return response.json()
     except Exception as e:
         print(f"Error sending Telegram: {e}")
         return None
 
-# ========== BROWSER SETUP ==========
-def setup_browser():
-    chrome_options = Options()
-    chrome_options.add_argument('--headless')
-    chrome_options.add_argument('--no-sandbox')
-    chrome_options.add_argument('--disable-dev-shm-usage')
-    chrome_options.add_argument('--disable-gpu')
-    chrome_options.add_argument('--window-size=1920,1080')
-    chrome_options.add_argument('--disable-blink-features=AutomationControlled')
-    chrome_options.add_argument('--disable-extensions')
-    chrome_options.add_argument('--disable-logging')
-    chrome_options.add_argument('--log-level=3')
-    chrome_options.add_argument('--single-process')
-    chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
-    chrome_options.add_experimental_option('useAutomationExtension', False)
-    
+# ========== BINANCE API ==========
+def get_klines(symbol, interval, limit=200):
     try:
-        driver = webdriver.Chrome(options=chrome_options)
-        driver.set_page_load_timeout(30)
-        return driver
-    except Exception as e:
-        print(f"Error setting up browser: {e}")
-        return None
-
-# ========== COLOR DETECTION ==========
-def detect_divergence_by_color(screenshot):
-    """
-    Detect divergence lines by color:
-    - Red line = Bearish divergence (-RD)
-    - Green line = Bullish divergence (+RD)
-    """
-    try:
-        print("Processing image for color detection...")
-        image = Image.open(io.BytesIO(screenshot))
-        
-        # Convert to RGB numpy array
-        img_array = np.array(image.convert('RGB'))
-        height, width, _ = img_array.shape
-        
-        print(f"Image size: {width}x{height}")
-        
-        # Focus on upper half of chart (where divergence lines are)
-        upper_half = img_array[:height//2, :, :]
-        
-        # Detect RED color (Bearish divergence line)
-        # Looking for bright red: R>200, G<100, B<100
-        red_mask = (
-            (upper_half[:,:,0] > 180) &  # Red channel high
-            (upper_half[:,:,1] < 120) &   # Green channel low
-            (upper_half[:,:,2] < 120)     # Blue channel low
-        )
-        red_pixels = np.sum(red_mask)
-        
-        # Detect GREEN color (Bullish divergence line)
-        # Looking for bright green: R<100, G>200, B<100
-        green_mask = (
-            (upper_half[:,:,0] < 120) &   # Red channel low
-            (upper_half[:,:,1] > 180) &   # Green channel high
-            (upper_half[:,:,2] < 120)     # Blue channel low
-        )
-        green_pixels = np.sum(green_mask)
-        
-        print(f"Red pixels detected: {red_pixels}")
-        print(f"Green pixels detected: {green_pixels}")
-        
-        # Determine if divergence lines exist
-        bearish_found = red_pixels > RED_THRESHOLD
-        bullish_found = green_pixels > GREEN_THRESHOLD
-        
-        if bearish_found:
-            print("🔴 BEARISH DIVERGENCE LINE DETECTED!")
-        if bullish_found:
-            print("🟢 BULLISH DIVERGENCE LINE DETECTED!")
-        
-        # Clean up memory
-        del image, img_array, upper_half, red_mask, green_mask
-        gc.collect()
-        
-        return {
-            'bullish': bullish_found,
-            'bearish': bearish_found,
-            'red_pixels': int(red_pixels),
-            'green_pixels': int(green_pixels),
-            'screenshot': screenshot
+        url = "https://api.binance.com/api/v3/klines"
+        params = {
+            "symbol": symbol,
+            "interval": interval,
+            "limit": limit
         }
+        response = requests.get(url, params=params, timeout=10)
+        data = response.json()
+        
+        df = pd.DataFrame(data, columns=[
+            'timestamp', 'open', 'high', 'low', 'close', 'volume',
+            'close_time', 'quote_volume', 'trades', 'taker_buy_base',
+            'taker_buy_quote', 'ignore'
+        ])
+        
+        df['open'] = pd.to_numeric(df['open'])
+        df['high'] = pd.to_numeric(df['high'])
+        df['low'] = pd.to_numeric(df['low'])
+        df['close'] = pd.to_numeric(df['close'])
+        df['volume'] = pd.to_numeric(df['volume'])
+        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+        
+        return df
         
     except Exception as e:
-        print(f"Error in color detection: {e}")
+        print(f"Error fetching data from Binance: {e}")
         return None
 
-# ========== CHART CAPTURE ==========
-def capture_and_analyze_chart(driver):
+# ========== CVD CALCULATION ==========
+def calculate_cvd(df, period=21):
+    df['buying'] = df['volume'] * ((df['close'] - df['low']) / (df['high'] - df['low']))
+    df['selling'] = df['volume'] * ((df['high'] - df['close']) / (df['high'] - df['low']))
+    
+    df['buying'] = df['buying'].fillna(0)
+    df['selling'] = df['selling'].fillna(0)
+    
+    df['delta'] = df['buying'] - df['selling']
+    df['cvd'] = df['delta'].rolling(window=period).sum()
+    
+    return df
+
+def calculate_ema(series, period):
+    return series.ewm(span=period, adjust=False).mean()
+
+# ========== DIVERGENCE DETECTION ==========
+def find_divergence(df, lookback=30):
+    if len(df) < lookback + 10:
+        return None, None
+    
+    df['ema50'] = calculate_ema(df['close'], 50)
+    
+    recent_data = df.tail(lookback).copy()
+    
+    bearish_div = None
     try:
-        print(f"Navigating to chart...")
-        driver.get(TRADINGVIEW_CHART_URL)
-        
-        print(f"Waiting {WAIT_FOR_CHART_LOAD}s for chart to load...")
-        time.sleep(WAIT_FOR_CHART_LOAD)
-        
-        print("Taking screenshot...")
-        screenshot = driver.get_screenshot_as_png()
-        
-        # Analyze screenshot for color lines
-        result = detect_divergence_by_color(screenshot)
-        
-        return result
-        
+        price_highs = recent_data.nlargest(3, 'high')
+        if len(price_highs) >= 2:
+            high1_idx = price_highs.index[0]
+            high2_idx = price_highs.index[1]
+            
+            price1 = df.loc[high1_idx, 'high']
+            price2 = df.loc[high2_idx, 'high']
+            
+            cvd1 = df.loc[high1_idx, 'cvd']
+            cvd2 = df.loc[high2_idx, 'cvd']
+            
+            if price1 > price2 and cvd1 < cvd2 and cvd1 > 0 and cvd2 > 0:
+                if df.loc[high1_idx, 'close'] > df.loc[high1_idx, 'ema50']:
+                    bearish_div = {
+                        'type': 'bearish',
+                        'price1': price1,
+                        'price2': price2,
+                        'cvd1': cvd1,
+                        'cvd2': cvd2,
+                        'time': df.loc[high1_idx, 'timestamp']
+                    }
     except Exception as e:
-        print(f"Error capturing chart: {e}")
-        return None
+        print(f"Error detecting bearish divergence: {e}")
+    
+    bullish_div = None
+    try:
+        price_lows = recent_data.nsmallest(3, 'low')
+        if len(price_lows) >= 2:
+            low1_idx = price_lows.index[0]
+            low2_idx = price_lows.index[1]
+            
+            price1 = df.loc[low1_idx, 'low']
+            price2 = df.loc[low2_idx, 'low']
+            
+            cvd1 = df.loc[low1_idx, 'cvd']
+            cvd2 = df.loc[low2_idx, 'cvd']
+            
+            if price1 < price2 and cvd1 > cvd2 and cvd1 < 0 and cvd2 < 0:
+                if df.loc[low1_idx, 'close'] < df.loc[low1_idx, 'ema50']:
+                    bullish_div = {
+                        'type': 'bullish',
+                        'price1': price1,
+                        'price2': price2,
+                        'cvd1': cvd1,
+                        'cvd2': cvd2,
+                        'time': df.loc[low1_idx, 'timestamp']
+                    }
+    except Exception as e:
+        print(f"Error detecting bullish divergence: {e}")
+    
+    return bullish_div, bearish_div
 
 # ========== MAIN LOOP ==========
 def main():
-    # Start web server
     server_thread = threading.Thread(target=run_server, daemon=True)
     server_thread.start()
     print("Web server started on port 10000")
     
-    print("=" * 60)
+    print("=" * 70)
     print("TradingView CVD Alert Bot Started!")
-    print("COLOR LINE DETECTION MODE")
-    print("=" * 60)
-    print(f"Chart URL: {TRADINGVIEW_CHART_URL}")
+    print("BINANCE API MODE - Self-Calculate CVD")
+    print("=" * 70)
+    print(f"Symbol: {SYMBOL}")
+    print(f"Timeframe: {TIMEFRAME}")
+    print(f"CVD Period: {CVD_PERIOD}")
     print(f"Check interval: {CHECK_INTERVAL_SECONDS} seconds (5 minutes)")
     print(f"Telegram Chat ID: {TELEGRAM_CHAT_ID}")
-    print(f"Detection method: Color-based (Red/Green lines)")
-    print("=" * 60)
+    print("=" * 70)
     
-    # Send startup message
     startup_msg = (
         "🤖 *CVD Alert Bot Started!*\n\n"
-        "✅ Detection: Color lines (Red/Green)\n"
-        "⏱️ Interval: 5 minutes\n"
-        "📊 Monitoring for divergence signals..."
+        f"📊 Symbol: {SYMBOL}\n"
+        f"⏱️ Timeframe: {TIMEFRAME}\n"
+        f"🔢 CVD Period: {CVD_PERIOD}\n"
+        f"⏰ Check: Every 5 minutes\n\n"
+        "✅ Using Binance API (No TradingView needed)\n"
+        "📈 Monitoring for divergence signals..."
     )
     send_telegram_message(startup_msg)
     
     last_bullish_alert = 0
     last_bearish_alert = 0
-    cooldown_period = 600  # 10 minutes cooldown
+    cooldown_period = 3600
     
-    driver = None
     retry_count = 0
     
     try:
         while True:
-            # Setup browser if needed
-            if driver is None:
-                print("\nSetting up browser...")
-                driver = setup_browser()
-                if driver is None:
-                    retry_count += 1
-                    if retry_count >= MAX_RETRIES:
-                        error_msg = "❌ Failed to setup browser after 3 retries"
-                        print(error_msg)
-                        send_telegram_message(error_msg)
-                        break
-                    print(f"Retry {retry_count}/{MAX_RETRIES} after 60s...")
-                    time.sleep(60)
-                    continue
-                retry_count = 0
-            
-            print(f"\n{'='*60}")
-            print(f"[{datetime.now()}] Checking chart...")
-            print(f"{'='*60}")
+            print(f"\n{'='*70}")
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Checking {SYMBOL}...")
+            print(f"{'='*70}")
             
             try:
-                result = capture_and_analyze_chart(driver)
+                print(f"📥 Fetching data from Binance...")
+                df = get_klines(SYMBOL, TIMEFRAME, limit=200)
                 
-                if result:
-                    current_time = time.time()
-                    
-                    # Check for Bullish Divergence
-                    if result['bullish']:
-                        if current_time - last_bullish_alert > cooldown_period:
-                            message = (
-                                "🟢 *BULLISH DIVERGENCE DETECTED!*\n\n"
-                                "✅ Green divergence line found\n"
-                                f"📊 Green pixels: {result['green_pixels']}\n"
-                                f"⏰ Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-                            )
-                            send_telegram_message(message, result['screenshot'])
+                if df is None or len(df) < 50:
+                    print("❌ Failed to fetch data or insufficient data")
+                    retry_count += 1
+                    if retry_count >= MAX_RETRIES:
+                        error_msg = "❌ Failed to fetch data after 3 retries"
+                        print(error_msg)
+                        send_telegram_message(error_msg)
+                        retry_count = 0
+                    time.sleep(60)
+                    continue
+                
+                retry_count = 0
+                
+                print(f"📊 Calculating CVD...")
+                df = calculate_cvd(df, period=CVD_PERIOD)
+                
+                latest = df.iloc[-1]
+                current_price = latest['close']
+                current_cvd = latest['cvd']
+                
+                print(f"💰 Current Price: ${current_price:.2f}")
+                print(f"📈 Current CVD: {current_cvd:.2f}")
+                
+                print(f"🔍 Checking for divergence...")
+                bullish_div, bearish_div = find_divergence(df, lookback=DIVERGENCE_LOOKBACK)
+                
+                current_time = time.time()
+                
+                if bullish_div:
+                    if current_time - last_bullish_alert > cooldown_period:
+                        print(f"🟢 BULLISH DIVERGENCE DETECTED!")
+                        message = (
+                            "🟢 *BULLISH DIVERGENCE DETECTED!*\n\n"
+                            f"📊 Symbol: {SYMBOL}\n"
+                            f"⏰ Time: {bullish_div['time'].strftime('%Y-%m-%d %H:%M')}\n\n"
+                            f"💰 Price:\n"
+                            f"  • Low 1: ${bullish_div['price1']:.2f}\n"
+                            f"  • Low 2: ${bullish_div['price2']:.2f}\n"
+                            f"  • Lower Low: ✅\n\n"
+                            f"📈 CVD:\n"
+                            f"  • CVD 1: {bullish_div['cvd1']:.2f}\n"
+                            f"  • CVD 2: {bullish_div['cvd2']:.2f}\n"
+                            f"  • Higher Low: ✅\n\n"
+                            f"🎯 Signal: *BULLISH REVERSAL*"
+                        )
+                        result = send_telegram_message(message)
+                        if result:
                             last_bullish_alert = current_time
                             print("✅ Bullish alert sent to Telegram!")
                         else:
-                            time_left = int((cooldown_period - (current_time - last_bullish_alert)) / 60)
-                            print(f"⏳ Bullish divergence in cooldown ({time_left} min left)")
-                    
-                    # Check for Bearish Divergence
-                    if result['bearish']:
-                        if current_time - last_bearish_alert > cooldown_period:
-                            message = (
-                                "🔴 *BEARISH DIVERGENCE DETECTED!*\n\n"
-                                "✅ Red divergence line found\n"
-                                f"📊 Red pixels: {result['red_pixels']}\n"
-                                f"⏰ Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-                            )
-                            send_telegram_message(message, result['screenshot'])
+                            print("❌ Failed to send Telegram alert")
+                    else:
+                        time_left = int((cooldown_period - (current_time - last_bullish_alert)) / 60)
+                        print(f"⏳ Bullish divergence in cooldown ({time_left} min left)")
+                
+                if bearish_div:
+                    if current_time - last_bearish_alert > cooldown_period:
+                        print(f"🔴 BEARISH DIVERGENCE DETECTED!")
+                        message = (
+                            "🔴 *BEARISH DIVERGENCE DETECTED!*\n\n"
+                            f"📊 Symbol: {SYMBOL}\n"
+                            f"⏰ Time: {bearish_div['time'].strftime('%Y-%m-%d %H:%M')}\n\n"
+                            f"💰 Price:\n"
+                            f"  • High 1: ${bearish_div['price1']:.2f}\n"
+                            f"  • High 2: ${bearish_div['price2']:.2f}\n"
+                            f"  • Higher High: ✅\n\n"
+                            f"📈 CVD:\n"
+                            f"  • CVD 1: {bearish_div['cvd1']:.2f}\n"
+                            f"  • CVD 2: {bearish_div['cvd2']:.2f}\n"
+                            f"  • Lower High: ✅\n\n"
+                            f"🎯 Signal: *BEARISH REVERSAL*"
+                        )
+                        result = send_telegram_message(message)
+                        if result:
                             last_bearish_alert = current_time
                             print("✅ Bearish alert sent to Telegram!")
                         else:
-                            time_left = int((cooldown_period - (current_time - last_bearish_alert)) / 60)
-                            print(f"⏳ Bearish divergence in cooldown ({time_left} min left)")
-                    
-                    if not result['bullish'] and not result['bearish']:
-                        print("📊 No divergence lines detected")
+                            print("❌ Failed to send Telegram alert")
+                    else:
+                        time_left = int((cooldown_period - (current_time - last_bearish_alert)) / 60)
+                        print(f"⏳ Bearish divergence in cooldown ({time_left} min left)")
+                
+                if not bullish_div and not bearish_div:
+                    print("📊 No divergence detected")
                 
             except Exception as e:
                 print(f"❌ Error in check loop: {e}")
-                # Restart browser on error
-                try:
-                    if driver:
-                        driver.quit()
-                except:
-                    pass
-                driver = None
                 time.sleep(30)
                 continue
             
-            # Clean up memory
-            gc.collect()
-            
             print(f"\n💤 Sleeping for {CHECK_INTERVAL_SECONDS} seconds (5 minutes)...")
-            print(f"Next check at: {datetime.fromtimestamp(time.time() + CHECK_INTERVAL_SECONDS).strftime('%H:%M:%S')}")
+            next_check = datetime.fromtimestamp(time.time() + CHECK_INTERVAL_SECONDS)
+            print(f"⏰ Next check at: {next_check.strftime('%H:%M:%S')}")
             time.sleep(CHECK_INTERVAL_SECONDS)
             
     except KeyboardInterrupt:
@@ -299,12 +311,28 @@ def main():
         error_msg = f"❌ Fatal error: {str(e)}"
         print(error_msg)
         send_telegram_message(error_msg)
-    finally:
-        if driver:
-            try:
-                driver.quit()
-            except:
-                pass
 
 if __name__ == "__main__":
     main()
+```
+
+---
+
+## ✅ **SAU KHI PASTE CODE:**
+
+4. Scroll xuống
+5. Commit message: "Add new main.py with Binance API"
+6. Click **"Commit new file"**
+
+---
+
+## 🔄 **DEPLOY:**
+
+1. Render → **"Manual Deploy"** → **"Clear build cache & deploy"**
+2. Build sẽ NHANH (~2 phút)
+3. Logs sẽ hiển thị:
+```
+Successfully installed flask-3.0.0 numpy-1.24.3 pandas-2.0.3 requests-2.31.0
+==> Build successful!
+Web server started on port 10000
+BINANCE API MODE - Self-Calculate CVD
