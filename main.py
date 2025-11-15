@@ -33,7 +33,8 @@ TRADINGVIEW_CHART_URL = ""
 EXCHANGE = "OKX"
 SYMBOL = "BTC-USDT-SWAP"
 TIMEFRAME = "15m"
-CVD_PERIOD = 20
+CVD_PERIOD = 21
+FRACTAL_PERIOD = 5
 DIVERGENCE_LOOKBACK = 30
 CHECK_INTERVAL_SECONDS = 300
 USE_TRADINGVIEW = False
@@ -150,39 +151,55 @@ def calculate_cvd(df, period=21):
 def calculate_ema(series, period):
     return series.ewm(span=period, adjust=False).mean()
 
-def find_divergence(df, lookback=30):
+def find_divergence(df, cvd_period=21, fractal_period=5, lookback=30):
     if len(df) < lookback + 10:
         return None, None
     df['ema50'] = calculate_ema(df['close'], 50)
     recent_data = df.tail(lookback).copy()
     bearish_div = None
     try:
-        price_highs = recent_data.nlargest(3, 'high')
-        if len(price_highs) >= 2:
-            high1_idx = price_highs.index[0]
-            high2_idx = price_highs.index[1]
+        price_highs_idx = []
+        for i in range(fractal_period, len(recent_data) - fractal_period):
+            idx = recent_data.index[i]
+            is_pivot_high = True
+            for j in range(1, fractal_period + 1):
+                if recent_data.iloc[i]['high'] <= recent_data.iloc[i-j]['high'] or recent_data.iloc[i]['high'] <= recent_data.iloc[i+j]['high']:
+                    is_pivot_high = False
+                    break
+            if is_pivot_high and recent_data.iloc[i]['close'] > recent_data.iloc[i]['ema50']:
+                price_highs_idx.append(idx)
+        if len(price_highs_idx) >= 2:
+            high1_idx = price_highs_idx[-1]
+            high2_idx = price_highs_idx[-2]
             price1 = df.loc[high1_idx, 'high']
             price2 = df.loc[high2_idx, 'high']
             cvd1 = df.loc[high1_idx, 'cvd']
             cvd2 = df.loc[high2_idx, 'cvd']
             if price1 > price2 and cvd1 < cvd2 and cvd1 > 0 and cvd2 > 0:
-                if df.loc[high1_idx, 'close'] > df.loc[high1_idx, 'ema50']:
-                    bearish_div = {'type': 'bearish', 'price1': price1, 'price2': price2, 'cvd1': cvd1, 'cvd2': cvd2, 'time': df.loc[high1_idx, 'timestamp']}
+                bearish_div = {'type': 'bearish', 'price1': price1, 'price2': price2, 'cvd1': cvd1, 'cvd2': cvd2, 'time': df.loc[high1_idx, 'timestamp']}
     except Exception as e:
         print(f"Error detecting bearish divergence: {e}")
     bullish_div = None
     try:
-        price_lows = recent_data.nsmallest(3, 'low')
-        if len(price_lows) >= 2:
-            low1_idx = price_lows.index[0]
-            low2_idx = price_lows.index[1]
+        price_lows_idx = []
+        for i in range(fractal_period, len(recent_data) - fractal_period):
+            idx = recent_data.index[i]
+            is_pivot_low = True
+            for j in range(1, fractal_period + 1):
+                if recent_data.iloc[i]['low'] >= recent_data.iloc[i-j]['low'] or recent_data.iloc[i]['low'] >= recent_data.iloc[i+j]['low']:
+                    is_pivot_low = False
+                    break
+            if is_pivot_low and recent_data.iloc[i]['close'] < recent_data.iloc[i]['ema50']:
+                price_lows_idx.append(idx)
+        if len(price_lows_idx) >= 2:
+            low1_idx = price_lows_idx[-1]
+            low2_idx = price_lows_idx[-2]
             price1 = df.loc[low1_idx, 'low']
             price2 = df.loc[low2_idx, 'low']
             cvd1 = df.loc[low1_idx, 'cvd']
             cvd2 = df.loc[low2_idx, 'cvd']
             if price1 < price2 and cvd1 > cvd2 and cvd1 < 0 and cvd2 < 0:
-                if df.loc[low1_idx, 'close'] < df.loc[low1_idx, 'ema50']:
-                    bullish_div = {'type': 'bullish', 'price1': price1, 'price2': price2, 'cvd1': cvd1, 'cvd2': cvd2, 'time': df.loc[low1_idx, 'timestamp']}
+                bullish_div = {'type': 'bullish', 'price1': price1, 'price2': price2, 'cvd1': cvd1, 'cvd2': cvd2, 'time': df.loc[low1_idx, 'timestamp']}
     except Exception as e:
         print(f"Error detecting bullish divergence: {e}")
     return bullish_div, bearish_div
@@ -199,9 +216,10 @@ def main():
     print(f"Symbol: {SYMBOL}")
     print(f"Timeframe: {TIMEFRAME}")
     print(f"CVD Period: {CVD_PERIOD}")
+    print(f"Fractal Period: {FRACTAL_PERIOD}")
     print(f"Check interval: {CHECK_INTERVAL_SECONDS} seconds")
     print("=" * 70)
-    startup_msg = f"🤖 *CVD Alert Bot Started!*\n\n📊 Exchange: {EXCHANGE}\n💱 Symbol: {SYMBOL}\n⏱️ Timeframe: {TIMEFRAME}\n🔢 CVD Period: {CVD_PERIOD}\n⏰ Check: Every 5 minutes\n\n✅ Using {EXCHANGE} API\n📈 Monitoring for divergence signals..."
+    startup_msg = f"🤖 *CVD Alert Bot Started!*\n\n📊 Exchange: {EXCHANGE}\n💱 Symbol: {SYMBOL}\n⏱️ Timeframe: {TIMEFRAME}\n🔢 CVD Period: {CVD_PERIOD}\n🔍 Fractal Period: {FRACTAL_PERIOD}\n⏰ Check: Every 5 minutes\n\n✅ Using {EXCHANGE} API\n📈 Monitoring for divergence signals..."
     send_telegram_message(startup_msg)
     last_bullish_alert = 0
     last_bearish_alert = 0
@@ -246,8 +264,8 @@ def main():
                     current_cvd = latest['cvd']
                     print(f"💰 Current Price: ${current_price:.2f}")
                     print(f"📈 Current CVD: {current_cvd:.2f}")
-                    print(f"🔍 Checking for divergence...")
-                    bullish_div, bearish_div = find_divergence(df, lookback=DIVERGENCE_LOOKBACK)
+                    print(f"🔍 Checking for divergence (Fractal Period: {FRACTAL_PERIOD})...")
+                    bullish_div, bearish_div = find_divergence(df, cvd_period=CVD_PERIOD, fractal_period=FRACTAL_PERIOD, lookback=DIVERGENCE_LOOKBACK)
                     result = {'bullish': bullish_div is not None, 'bearish': bearish_div is not None, 'screenshot': None}
                 current_time = time.time()
                 if result and result.get('bullish'):
