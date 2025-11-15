@@ -1,7 +1,7 @@
 import os
 import time
 import requests
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 import pandas as pd
 import numpy as np
 from flask import Flask
@@ -10,6 +10,9 @@ from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from PIL import Image
 import io
+
+# Vietnam timezone (UTC+7)
+VN_TZ = timezone(timedelta(hours=7))
 
 app = Flask(__name__)
 
@@ -29,6 +32,8 @@ def run_server():
 TELEGRAM_BOT_TOKEN = '8248626952:AAHaS6S4CPloeUJhJvWLSrG8HXT8whSs6w8'  # Your bot token from @BotFather
 
 TELEGRAM_CHAT_ID = '1853898757'  # Your chat ID
+
+
 TRADINGVIEW_CHART_URL = ""
 EXCHANGE = "OKX"
 SYMBOL = "BTC-USDT-SWAP"
@@ -229,7 +234,7 @@ def main():
     try:
         while True:
             print(f"\n{'='*70}")
-            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Checking {SYMBOL}...")
+            print(f"[{datetime.now(VN_TZ).strftime('%Y-%m-%d %H:%M:%S')} VN] Checking {SYMBOL}...")
             print(f"{'='*70}")
             try:
                 if USE_TRADINGVIEW and TRADINGVIEW_CHART_URL:
@@ -271,7 +276,8 @@ def main():
                 if result and result.get('bullish'):
                     if current_time - last_bullish_alert > cooldown_period:
                         print(f"🟢 BULLISH DIVERGENCE DETECTED!")
-                        message = f"🟢 *BULLISH DIVERGENCE DETECTED!*\n\n📊 Symbol: {SYMBOL}\n⏰ Time: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n🎯 Signal: *BULLISH REVERSAL*"
+                        vn_time = datetime.now(VN_TZ).strftime('%Y-%m-%d %H:%M')
+                        message = f"🟢 *BULLISH DIVERGENCE DETECTED!*\n\n📊 Symbol: {SYMBOL}\n⏰ Time: {vn_time} (VN)\n\n🎯 Signal: *BULLISH REVERSAL*"
                         send_telegram_message(message, result.get('screenshot'))
                         last_bullish_alert = current_time
                         print("✅ Bullish alert sent!")
@@ -281,7 +287,8 @@ def main():
                 if result and result.get('bearish'):
                     if current_time - last_bearish_alert > cooldown_period:
                         print(f"🔴 BEARISH DIVERGENCE DETECTED!")
-                        message = f"🔴 *BEARISH DIVERGENCE DETECTED!*\n\n📊 Symbol: {SYMBOL}\n⏰ Time: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n🎯 Signal: *BEARISH REVERSAL*"
+                        vn_time = datetime.now(VN_TZ).strftime('%Y-%m-%d %H:%M')
+                        message = f"🔴 *BEARISH DIVERGENCE DETECTED!*\n\n📊 Symbol: {SYMBOL}\n⏰ Time: {vn_time} (VN)\n\n🎯 Signal: *BEARISH REVERSAL*"
                         send_telegram_message(message, result.get('screenshot'))
                         last_bearish_alert = current_time
                         print("✅ Bearish alert sent!")
@@ -296,8 +303,8 @@ def main():
                 time.sleep(60)
                 continue
             print(f"\n💤 Sleeping for {CHECK_INTERVAL_SECONDS} seconds...")
-            next_check = datetime.fromtimestamp(time.time() + CHECK_INTERVAL_SECONDS)
-            print(f"⏰ Next check at: {next_check.strftime('%H:%M:%S')}")
+            next_check = datetime.now(VN_TZ) + timedelta(seconds=CHECK_INTERVAL_SECONDS)
+            print(f"⏰ Next check at: {next_check.strftime('%H:%M:%S')} (VN)")
             time.sleep(CHECK_INTERVAL_SECONDS)
     except KeyboardInterrupt:
         print("\n🛑 Bot stopped by user")
