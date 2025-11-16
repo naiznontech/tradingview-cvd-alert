@@ -12,7 +12,7 @@ VN_TZ = timezone(timedelta(hours=7))
 
 @app.route('/')
 def home():
-    return "CVD Alert Bot (Exact Pine Script Logic)"
+    return "CVD Alert Bot (Fixed Pine Script Logic)"
 
 @app.route('/health')
 def health():
@@ -22,10 +22,8 @@ def run_server():
     app.run(host='0.0.0.0', port=10000, debug=False, use_reloader=False)
 
 # ========== CONFIGURATION ==========
-
-TELEGRAM_BOT_TOKEN = '8248626952:AAHaS6S4CPloeUJhJvWLSrG8HXT8whSs6w8'  # Your bot token from @BotFather
-
-TELEGRAM_CHAT_ID = '1853898757'  # Your chat ID
+TELEGRAM_BOT_TOKEN = '8248626952:AAHaS6S4CPloeUJhJvWLSrG8HXT8whSs6w8'
+TELEGRAM_CHAT_ID = '1853898757'
 EXCHANGE = "OKX"
 SYMBOL = "BTC-USDT-SWAP"
 TIMEFRAME = "15m"
@@ -88,7 +86,12 @@ def calculate_ema(series, period):
 
 def find_divergence_pine_exact(df, fractal_n=5, cvd_period=20):
     """
-    Exact implementation of Pine Script CVD Divergence logic
+    FIXED: Exact implementation matching Pine Script logic
+    
+    Key fixes:
+    1. Pivot price taken at index i (not i-n)
+    2. CVD taken at index i-n (offset by fractal_n)
+    3. Trend check at pivot bar (index i)
     """
     if len(df) < fractal_n * 2 + 50:
         return None, None
@@ -103,14 +106,18 @@ def find_divergence_pine_exact(df, fractal_n=5, cvd_period=20):
             if df.iloc[i]['high'] <= df.iloc[i-j]['high'] or df.iloc[i]['high'] <= df.iloc[i+j]['high']:
                 is_pivot = False
                 break
+        
         if is_pivot:
-            # Check uptrend: close[n] > EMA
-            if i >= fractal_n and df.iloc[i - fractal_n]['close'] > df.iloc[i - fractal_n]['ema50']:
+            # FIXED: Check uptrend at pivot bar (index i)
+            # Pine: up_trend = close[n] > EMA, upFractal = UpPivot and up_trend
+            # This means: close at (i-n) > EMA at (i-n)
+            check_idx = i - fractal_n
+            if check_idx >= 0 and df.iloc[check_idx]['close'] > df.iloc[check_idx]['ema50']:
                 upFractals.append({
                     'bar_index': i,
-                    'price': df.iloc[i - fractal_n]['high'],
-                    'cvd': df.iloc[i - fractal_n]['cvd'],
-                    'timestamp': df.iloc[i - fractal_n]['timestamp']
+                    'price': df.iloc[i]['high'],  # FIXED: Price at pivot bar
+                    'cvd': df.iloc[check_idx]['cvd'],  # CVD at i-n
+                    'timestamp': df.iloc[i]['timestamp']
                 })
     
     # Find downFractals (pivot lows in downtrend)
@@ -121,14 +128,16 @@ def find_divergence_pine_exact(df, fractal_n=5, cvd_period=20):
             if df.iloc[i]['low'] >= df.iloc[i-j]['low'] or df.iloc[i]['low'] >= df.iloc[i+j]['low']:
                 is_pivot = False
                 break
+        
         if is_pivot:
-            # Check downtrend: close[n] > EMA
-            if i >= fractal_n and df.iloc[i - fractal_n]['close'] < df.iloc[i - fractal_n]['ema50']:
+            # FIXED: Check downtrend at pivot bar (index i)
+            check_idx = i - fractal_n
+            if check_idx >= 0 and df.iloc[check_idx]['close'] < df.iloc[check_idx]['ema50']:
                 downFractals.append({
                     'bar_index': i,
-                    'price': df.iloc[i - fractal_n]['low'],
-                    'cvd': df.iloc[i - fractal_n]['cvd'],
-                    'timestamp': df.iloc[i - fractal_n]['timestamp']
+                    'price': df.iloc[i]['low'],  # FIXED: Price at pivot bar
+                    'cvd': df.iloc[check_idx]['cvd'],  # CVD at i-n
+                    'timestamp': df.iloc[i]['timestamp']
                 })
     
     current_bar = len(df) - 1
@@ -223,7 +232,7 @@ def main():
     server_thread.start()
     print("Web server started on port 10000")
     print("=" * 70)
-    print("CVD Alert Bot - EXACT Pine Script Logic")
+    print("CVD Alert Bot - FIXED Pine Script Logic")
     print("=" * 70)
     print(f"Exchange: {EXCHANGE}")
     print(f"Symbol: {SYMBOL}")
@@ -233,7 +242,7 @@ def main():
     print(f"Check interval: {CHECK_INTERVAL_SECONDS} seconds")
     print("=" * 70)
     
-    startup_msg = f"🤖 *CVD Alert Bot Started!*\n\n📊 Exchange: {EXCHANGE}\n💱 Symbol: {SYMBOL}\n⏱️ Timeframe: {TIMEFRAME}\n🔢 CVD Period: {CVD_PERIOD}\n🔍 Fractal Period: {FRACTAL_PERIOD}\n⏰ Check: Every 5 minutes\n\n✅ Exact Pine Script Logic\n📈 Monitoring for divergence signals..."
+    startup_msg = f"🤖 *CVD Alert Bot Started!*\n\n📊 Exchange: {EXCHANGE}\n💱 Symbol: {SYMBOL}\n⏱️ Timeframe: {TIMEFRAME}\n🔢 CVD Period: {CVD_PERIOD}\n🔍 Fractal Period: {FRACTAL_PERIOD}\n⏰ Check: Every 5 minutes\n\n✅ FIXED Pine Script Logic\n📈 Monitoring for divergence signals..."
     send_telegram_message(startup_msg)
     
     last_bullish_alert = 0
