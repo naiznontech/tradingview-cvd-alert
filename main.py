@@ -12,7 +12,7 @@ VN_TZ = timezone(timedelta(hours=7))
 
 @app.route('/')
 def home():
-    return "CVD Alert Bot (100% Pine Script Match)"
+    return "CVD Alert Bot (Final Fixed)"
 
 @app.route('/health')
 def health():
@@ -71,14 +71,22 @@ def get_klines(exchange, symbol, interval, limit=200):
         return None
 
 def calculate_cvd(df, period=20):
+    """Calculate CVD exactly as Pine Script"""
     denom = df['high'] - df['low']
     denom = denom.replace(0, 1e-10)
+    
+    # Exact Pine formula
     df['buying'] = df['volume'] * ((df['close'] - df['low']) / denom)
     df['selling'] = df['volume'] * ((df['high'] - df['close']) / denom)
+    
     df['buying'] = df['buying'].fillna(0)
     df['selling'] = df['selling'].fillna(0)
+    
     df['delta'] = df['buying'] - df['selling']
+    
+    # Periodic mode: sum over period
     df['cvd'] = df['delta'].rolling(window=period).sum()
+    
     return df
 
 def calculate_ema(series, period):
@@ -86,99 +94,97 @@ def calculate_ema(series, period):
 
 def find_divergence_pine_exact(df, fractal_n=5, cvd_period=20):
     """
-    100% EXACT Pine Script implementation
+    FINAL CORRECTED VERSION - 100% Pine Script Logic
     
-    Critical understanding:
-    - ta.pivothigh(n,n) detects pivot at current bar (index i)
-    - BUT ta.valuewhen(condition, high[n], 0) takes value at [n] offset
-    - So when pivot detected at i, we store high[i-n], cvd[i-n], bar_index[i-n]
+    Key insight from Pine Script:
+    - UpPivot = ta.pivothigh(n,n) detects at current bar i
+    - up_trend = close[n] > EMA checks n bars back
+    - upFractal = UpPivot and up_trend (true at bar i)
+    - High_Last_Price = ta.valuewhen(upFractal, high[n], 0)
+      This means: when upFractal is true at bar i, store high[i-n]
+    - High_Last_Bar = ta.valuewhen(upFractal, bar_index[n], 0)
+      This means: when upFractal is true at bar i, store bar_index[i-n]
     """
     if len(df) < fractal_n * 2 + 50:
         return None, None
     
     df['ema50'] = calculate_ema(df['close'], 50)
-    
-    # Add bar_index column (like Pine Script)
     df['bar_index'] = range(len(df))
     
-    # Find upFractals - EXACT Pine Logic
+    # Store when pivots are detected (at bar i, referencing i-n)
     upFractals = []
+    downFractals = []
+    
+    # Scan for pivots
     for i in range(fractal_n, len(df) - fractal_n):
-        # Check if it's a pivot high
-        is_pivot = True
+        # Check pivot high
+        is_pivot_high = True
         for j in range(1, fractal_n + 1):
             if df.iloc[i]['high'] <= df.iloc[i-j]['high'] or df.iloc[i]['high'] <= df.iloc[i+j]['high']:
-                is_pivot = False
+                is_pivot_high = False
                 break
         
-        if is_pivot:
-            # Pine: up_trend = close[n] > EMA
-            # This checks close at (current - n) vs EMA at (current - n)
-            check_idx = i - fractal_n
-            
-            if check_idx >= 0 and df.iloc[check_idx]['close'] > df.iloc[check_idx]['ema50']:
-                # Pine: ta.valuewhen(upFractal, high[n], 0)
-                # When upFractal is true at bar i, take high[i-n]
-                upFractals.append({
-                    'bar_index': check_idx,  # Store bar_index[n]
-                    'price': df.iloc[check_idx]['high'],  # Store high[n]
-                    'cvd': df.iloc[check_idx]['cvd'],  # Store CVD[n]
-                    'timestamp': df.iloc[check_idx]['timestamp'],
-                    'detected_at': i  # For debugging
-                })
-    
-    # Find downFractals - EXACT Pine Logic
-    downFractals = []
-    for i in range(fractal_n, len(df) - fractal_n):
-        # Check if it's a pivot low
-        is_pivot = True
+        # Check pivot low
+        is_pivot_low = True
         for j in range(1, fractal_n + 1):
             if df.iloc[i]['low'] >= df.iloc[i-j]['low'] or df.iloc[i]['low'] >= df.iloc[i+j]['low']:
-                is_pivot = False
+                is_pivot_low = False
                 break
         
-        if is_pivot:
-            # Pine: down_trend = close[n] < EMA
+        # Pine: up_trend = close[n] > EMA (check at i-n)
+        # Pine: upFractal = UpPivot and up_trend
+        if is_pivot_high:
             check_idx = i - fractal_n
-            
-            if check_idx >= 0 and df.iloc[check_idx]['close'] < df.iloc[check_idx]['ema50']:
-                # Pine: ta.valuewhen(downFractal, low[n], 0)
-                downFractals.append({
-                    'bar_index': check_idx,  # Store bar_index[n]
-                    'price': df.iloc[check_idx]['low'],  # Store low[n]
-                    'cvd': df.iloc[check_idx]['cvd'],  # Store CVD[n]
-                    'timestamp': df.iloc[check_idx]['timestamp'],
-                    'detected_at': i  # For debugging
-                })
+            if check_idx >= 0:
+                # Check if close[n] > EMA at the time of detection
+                if df.iloc[check_idx]['close'] > df.iloc[check_idx]['ema50']:
+                    # When upFractal is true at bar i:
+                    # Store high[n], Hist[n], bar_index[n]
+                    upFractals.append({
+                        'detection_bar': i,
+                        'bar_index': check_idx,  # bar_index[n]
+                        'price': df.iloc[check_idx]['high'],  # high[n]
+                        'cvd': df.iloc[check_idx]['cvd'],  # CVD[n]
+                        'timestamp': df.iloc[check_idx]['timestamp']
+                    })
+        
+        # Pine: down_trend = close[n] < EMA (check at i-n)
+        # Pine: downFractal = downPivot and down_trend
+        if is_pivot_low:
+            check_idx = i - fractal_n
+            if check_idx >= 0:
+                if df.iloc[check_idx]['close'] < df.iloc[check_idx]['ema50']:
+                    downFractals.append({
+                        'detection_bar': i,
+                        'bar_index': check_idx,  # bar_index[n]
+                        'price': df.iloc[check_idx]['low'],  # low[n]
+                        'cvd': df.iloc[check_idx]['cvd'],  # CVD[n]
+                        'timestamp': df.iloc[check_idx]['timestamp']
+                    })
     
     current_bar = len(df) - 1
     bearish_div = None
+    bullish_div = None
     
-    # Bearish Divergence Detection - EXACT Pine Logic
+    # Bearish Divergence
     if len(upFractals) >= 2:
         High_Last = upFractals[-1]
         High_Per = upFractals[-2]
         
         High_Last_Bar = High_Last['bar_index']
         High_Per_Bar = High_Per['bar_index']
-        
-        # Time_Condition_Bear: (High_Last_Bar + 30) > current_bar
-        Time_Condition_Bear = (High_Last_Bar + 30) > current_bar
-        
-        # Distance condition: (High_Last_Bar - High_Per_Bar) < 30
-        distance_ok = (High_Last_Bar - High_Per_Bar) < 30
-        
+        High_Last_Price = High_Last['price']
+        High_Per_Price = High_Per['price']
         High_Last_Hist = High_Last['cvd']
         High_Per_Hist = High_Per['cvd']
         
-        # Both CVD > 0
+        # Pine conditions
+        Time_Condition_Bear = (High_Last_Bar + 30) > current_bar
+        distance_ok = (High_Last_Bar - High_Per_Bar) < 30
         both_positive = High_Last_Hist > 0 and High_Per_Hist > 0
         
         if both_positive and Time_Condition_Bear and distance_ok:
-            High_Last_Price = High_Last['price']
-            High_Per_Price = High_Per['price']
-            
-            # Divergence: Price Higher High + CVD Lower High
+            # Divergence: Price HH + CVD LH
             if High_Last_Price > High_Per_Price and High_Last_Hist < High_Per_Hist:
                 bearish_div = {
                     'type': 'bearish',
@@ -187,41 +193,34 @@ def find_divergence_pine_exact(df, fractal_n=5, cvd_period=20):
                     'cvd1': High_Last_Hist,
                     'cvd2': High_Per_Hist,
                     'time': High_Last['timestamp'],
-                    'bars_ago': current_bar - High_Last_Bar
+                    'bars_ago': current_bar - High_Last_Bar,
+                    'detected_at_bar': High_Last['detection_bar']
                 }
                 print(f"  🔴 Bearish Divergence:")
-                print(f"     Price: {High_Per_Price:.2f} -> {High_Last_Price:.2f} (Higher)")
-                print(f"     CVD: {High_Per_Hist:.2f} -> {High_Last_Hist:.2f} (Lower)")
-                print(f"     Last pivot at bar {High_Last_Bar}, detected at {High_Last['detected_at']}")
-                print(f"     Bars ago: {current_bar - High_Last_Bar}")
+                print(f"     Price: {High_Per_Price:.2f} -> {High_Last_Price:.2f} (HH)")
+                print(f"     CVD: {High_Per_Hist:.2f} -> {High_Last_Hist:.2f} (LH)")
+                print(f"     Bar indices: {High_Per_Bar} -> {High_Last_Bar}")
+                print(f"     Bars ago from current: {current_bar - High_Last_Bar}")
     
-    bullish_div = None
-    
-    # Bullish Divergence Detection - EXACT Pine Logic
+    # Bullish Divergence
     if len(downFractals) >= 2:
         Low_Last = downFractals[-1]
         Low_Per = downFractals[-2]
         
         Low_Last_Bar = Low_Last['bar_index']
         Low_Per_Bar = Low_Per['bar_index']
-        
-        # Time_Condition_Bull: (Low_Last_Bar + 30) > current_bar
-        Time_Condition_Bull = (Low_Last_Bar + 30) > current_bar
-        
-        # Distance condition: (Low_Last_Bar - Low_Per_Bar) < 30
-        distance_ok = (Low_Last_Bar - Low_Per_Bar) < 30
-        
+        Low_Last_Price = Low_Last['price']
+        Low_Per_Price = Low_Per['price']
         Low_Last_Hist = Low_Last['cvd']
         Low_Per_Hist = Low_Per['cvd']
         
-        # Both CVD < 0
+        # Pine conditions
+        Time_Condition_Bull = (Low_Last_Bar + 30) > current_bar
+        distance_ok = (Low_Last_Bar - Low_Per_Bar) < 30
         both_negative = Low_Last_Hist < 0 and Low_Per_Hist < 0
         
         if both_negative and Time_Condition_Bull and distance_ok:
-            Low_Last_Price = Low_Last['price']
-            Low_Per_Price = Low_Per['price']
-            
-            # Divergence: Price Lower Low + CVD Higher Low
+            # Divergence: Price LL + CVD HL
             if Low_Last_Price < Low_Per_Price and Low_Last_Hist > Low_Per_Hist:
                 bullish_div = {
                     'type': 'bullish',
@@ -230,150 +229,118 @@ def find_divergence_pine_exact(df, fractal_n=5, cvd_period=20):
                     'cvd1': Low_Last_Hist,
                     'cvd2': Low_Per_Hist,
                     'time': Low_Last['timestamp'],
-                    'bars_ago': current_bar - Low_Last_Bar
+                    'bars_ago': current_bar - Low_Last_Bar,
+                    'detected_at_bar': Low_Last['detection_bar']
                 }
                 print(f"  🟢 Bullish Divergence:")
-                print(f"     Price: {Low_Per_Price:.2f} -> {Low_Last_Price:.2f} (Lower)")
-                print(f"     CVD: {Low_Per_Hist:.2f} -> {Low_Last_Hist:.2f} (Higher)")
-                print(f"     Last pivot at bar {Low_Last_Bar}, detected at {Low_Last['detected_at']}")
-                print(f"     Bars ago: {current_bar - Low_Last_Bar}")
+                print(f"     Price: {Low_Per_Price:.2f} -> {Low_Last_Price:.2f} (LL)")
+                print(f"     CVD: {Low_Per_Hist:.2f} -> {Low_Last_Hist:.2f} (HL)")
+                print(f"     Bar indices: {Low_Per_Bar} -> {Low_Last_Bar}")
+                print(f"     Bars ago from current: {current_bar - Low_Last_Bar}")
     
     return bullish_div, bearish_div
 
 def main():
     server_thread = threading.Thread(target=run_server, daemon=True)
     server_thread.start()
-    print("Web server started on port 10000")
     print("=" * 70)
-    print("CVD Alert Bot - 100% Pine Script Match")
+    print("CVD Alert Bot - FINAL FIXED VERSION")
     print("=" * 70)
     print(f"Exchange: {EXCHANGE}")
     print(f"Symbol: {SYMBOL}")
     print(f"Timeframe: {TIMEFRAME}")
     print(f"CVD Period: {CVD_PERIOD}")
     print(f"Fractal Period: {FRACTAL_PERIOD}")
-    print(f"Check interval: {CHECK_INTERVAL_SECONDS} seconds")
     print("=" * 70)
     
-    startup_msg = f"🤖 *CVD Alert Bot Started!*\n\n📊 Exchange: {EXCHANGE}\n💱 Symbol: {SYMBOL}\n⏱️ Timeframe: {TIMEFRAME}\n🔢 CVD Period: {CVD_PERIOD}\n🔍 Fractal Period: {FRACTAL_PERIOD}\n⏰ Check: Every 5 minutes\n\n✅ 100% Pine Script Match\n📈 Monitoring for divergence signals..."
+    startup_msg = f"🤖 *CVD Bot Started - FINAL FIX*\n\n📊 {EXCHANGE}:{SYMBOL}\n⏱️ TF: {TIMEFRAME}\n🔢 CVD: {CVD_PERIOD} | Fractal: {FRACTAL_PERIOD}\n\n✅ Fixed Pine Script Logic\n📈 Monitoring..."
     send_telegram_message(startup_msg)
     
     last_bullish_alert = 0
     last_bearish_alert = 0
-    cooldown_period = 3600
+    cooldown_period = 1800  # 30 minutes
     consecutive_failures = 0
     
-    # Track last detected divergences to avoid duplicates
     last_bearish_time = None
     last_bullish_time = None
     
     try:
         while True:
             print(f"\n{'='*70}")
-            print(f"[{datetime.now(VN_TZ).strftime('%Y-%m-%d %H:%M:%S')} VN] Checking {SYMBOL}...")
+            print(f"[{datetime.now(VN_TZ).strftime('%Y-%m-%d %H:%M:%S')}] Checking...")
             print(f"{'='*70}")
             
             try:
-                print(f"📥 Fetching data from {EXCHANGE}...")
                 df = get_klines(EXCHANGE, SYMBOL, TIMEFRAME, limit=200)
                 
                 if df is None or len(df) < 50:
                     consecutive_failures += 1
-                    print(f"❌ Failed to fetch data ({consecutive_failures}/3)")
+                    print(f"❌ Data fetch failed ({consecutive_failures}/3)")
+                    time.sleep(60 if consecutive_failures < 3 else 300)
                     if consecutive_failures >= 3:
-                        error_msg = "⚠️ Failed to fetch data 3 times. Will retry..."
-                        print(error_msg)
-                        time.sleep(300)
                         consecutive_failures = 0
-                    else:
-                        time.sleep(60)
                     continue
                 
                 consecutive_failures = 0
-                print(f"📊 Calculating CVD...")
                 df = calculate_cvd(df, period=CVD_PERIOD)
                 
                 latest = df.iloc[-1]
-                current_price = latest['close']
-                current_cvd = latest['cvd']
+                print(f"💰 Price: ${latest['close']:.2f} | CVD: {latest['cvd']:.2f}")
                 
-                print(f"💰 Current Price: ${current_price:.2f}")
-                print(f"📈 Current CVD: {current_cvd:.2f}")
-                print(f"🔍 Detecting fractals and checking divergence...")
-                
-                bullish_div, bearish_div = find_divergence_pine_exact(df, fractal_n=FRACTAL_PERIOD, cvd_period=CVD_PERIOD)
+                bullish_div, bearish_div = find_divergence_pine_exact(
+                    df, fractal_n=FRACTAL_PERIOD, cvd_period=CVD_PERIOD
+                )
                 
                 current_time = time.time()
                 
-                # Alert for bullish divergence (with duplicate check)
+                # Bullish alert
                 if bullish_div:
                     div_time = bullish_div['time'].strftime('%Y-%m-%d %H:%M')
-                    
-                    # Only alert if it's a new divergence (different time than last one)
                     if div_time != last_bullish_time:
                         if current_time - last_bullish_alert > cooldown_period:
-                            vn_time = datetime.now(VN_TZ).strftime('%Y-%m-%d %H:%M')
-                            bars_info = f"\n📍 Detected: {bullish_div['bars_ago']} bars ago"
-                            message = f"🟢 *BULLISH DIVERGENCE DETECTED!*\n\n📊 Symbol: {SYMBOL}\n⏰ Time: {vn_time} (VN){bars_info}\n\n💰 Price: {bullish_div['price2']:.2f} → {bullish_div['price1']:.2f} (Lower)\n📈 CVD: {bullish_div['cvd2']:.2f} → {bullish_div['cvd1']:.2f} (Higher)\n\n🎯 Signal: *BULLISH REVERSAL*"
-                            result = send_telegram_message(message)
-                            if result:
+                            msg = f"🟢 *BULLISH DIVERGENCE*\n\n📊 {SYMBOL}\n⏰ {datetime.now(VN_TZ).strftime('%H:%M')} VN\n\n💰 Price: {bullish_div['price2']:.2f} → {bullish_div['price1']:.2f} (LL)\n📈 CVD: {bullish_div['cvd2']:.2f} → {bullish_div['cvd1']:.2f} (HL)\n\n🎯 *BULLISH REVERSAL*"
+                            if send_telegram_message(msg):
                                 last_bullish_alert = current_time
                                 last_bullish_time = div_time
                                 print("✅ Bullish alert sent!")
-                            else:
-                                print("❌ Failed to send alert")
                         else:
-                            time_left = int((cooldown_period - (current_time - last_bullish_alert)) / 60)
-                            print(f"⏳ Bullish in cooldown ({time_left} min left)")
+                            print(f"⏳ Cooldown: {int((cooldown_period-(current_time-last_bullish_alert))/60)}m")
                     else:
-                        print(f"⏭️ Bullish divergence already alerted (same timestamp)")
+                        print("⏭️ Already alerted")
                 
-                # Alert for bearish divergence (with duplicate check)
+                # Bearish alert
                 if bearish_div:
                     div_time = bearish_div['time'].strftime('%Y-%m-%d %H:%M')
-                    
-                    # Only alert if it's a new divergence (different time than last one)
                     if div_time != last_bearish_time:
                         if current_time - last_bearish_alert > cooldown_period:
-                            vn_time = datetime.now(VN_TZ).strftime('%Y-%m-%d %H:%M')
-                            bars_info = f"\n📍 Detected: {bearish_div['bars_ago']} bars ago"
-                            message = f"🔴 *BEARISH DIVERGENCE DETECTED!*\n\n📊 Symbol: {SYMBOL}\n⏰ Time: {vn_time} (VN){bars_info}\n\n💰 Price: {bearish_div['price2']:.2f} → {bearish_div['price1']:.2f} (Higher)\n📈 CVD: {bearish_div['cvd2']:.2f} → {bearish_div['cvd1']:.2f} (Lower)\n\n🎯 Signal: *BEARISH REVERSAL*"
-                            result = send_telegram_message(message)
-                            if result:
+                            msg = f"🔴 *BEARISH DIVERGENCE*\n\n📊 {SYMBOL}\n⏰ {datetime.now(VN_TZ).strftime('%H:%M')} VN\n\n💰 Price: {bearish_div['price2']:.2f} → {bearish_div['price1']:.2f} (HH)\n📈 CVD: {bearish_div['cvd2']:.2f} → {bearish_div['cvd1']:.2f} (LH)\n\n🎯 *BEARISH REVERSAL*"
+                            if send_telegram_message(msg):
                                 last_bearish_alert = current_time
                                 last_bearish_time = div_time
                                 print("✅ Bearish alert sent!")
-                            else:
-                                print("❌ Failed to send alert")
                         else:
-                            time_left = int((cooldown_period - (current_time - last_bearish_alert)) / 60)
-                            print(f"⏳ Bearish in cooldown ({time_left} min left)")
+                            print(f"⏳ Cooldown: {int((cooldown_period-(current_time-last_bearish_alert))/60)}m")
                     else:
-                        print(f"⏭️ Bearish divergence already alerted (same timestamp)")
+                        print("⏭️ Already alerted")
                 
                 if not bullish_div and not bearish_div:
-                    print("📊 No divergence detected")
+                    print("📊 No divergence")
                 
             except Exception as e:
-                print(f"❌ Error in check loop: {e}")
+                print(f"❌ Error: {e}")
                 import traceback
                 traceback.print_exc()
                 consecutive_failures += 1
                 time.sleep(60)
                 continue
             
-            print(f"\n💤 Sleeping for {CHECK_INTERVAL_SECONDS} seconds...")
             next_check = datetime.now(VN_TZ) + timedelta(seconds=CHECK_INTERVAL_SECONDS)
-            print(f"⏰ Next check at: {next_check.strftime('%H:%M:%S')} (VN)")
+            print(f"💤 Next: {next_check.strftime('%H:%M:%S')}")
             time.sleep(CHECK_INTERVAL_SECONDS)
             
     except KeyboardInterrupt:
-        print("\n🛑 Bot stopped by user")
-        send_telegram_message("🛑 CVD Alert Bot Stopped")
-    except Exception as e:
-        error_msg = f"❌ Fatal error: {str(e)}"
-        print(error_msg)
-        send_telegram_message(error_msg)
+        print("\n🛑 Stopped")
+        send_telegram_message("🛑 Bot Stopped")
 
 if __name__ == "__main__":
     main()
